@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         atcoder-tasks-page-colorize-during-contests
 // @namespace    iilj
-// @version      2021.5.6.0
+// @version      2021.7.11.0
 // @description  tasks ページにおいて，提出した問題に色付けを行います．開催中のコンテストの色付けについて，atcoder-tasks-page-colorizer が対応していないため，これを補完します．
 // @author       iilj
 // @supportURL   https://github.com/iilj/atcoder-tasks-page-colorize-during-contests/issues
@@ -82,28 +82,78 @@
     // https://greasyfork.org/ja/scripts/380404-atcoder-tasks-page-colorizer
     if (moment() >= endTime) return;
 
+    /** @type {Map<string, [number, string]>} */
+    const problemId2Info = new Map();
+    // 自分の得点状況の取得
+    {
+        const res = await fetch(`https://atcoder.jp/contests/${contestScreenName}/score`);
+        const scoreHtml = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(scoreHtml, 'text/html');
+        doc.querySelectorAll('#main-div tbody tr').forEach((tableRow, key) => {
+            const problemId = tableRow.querySelector('td:nth-child(1) a').getAttribute('href').split('/').pop();
+            const score = Number(tableRow.querySelector('td:nth-child(3)').textContent);
+            const datetimeString = tableRow.querySelector('td:nth-child(4)').textContent;
+            // console.log(problemId, score, datetimeString);
+            problemId2Info.set(problemId, [score, datetimeString]);
+        });
+    }
+
+    // テーブルの更新
+    {
+        document.querySelector('#main-div thead th:last-child').insertAdjacentHTML(
+            'beforebegin', '<th width="10%" class="text-center">得点</th><th class="text-center">提出日時</th>');
+        document.querySelectorAll('#main-div tbody tr').forEach((tableRow, key) => {
+            const problemId = tableRow.querySelector('td:nth-child(2) a').getAttribute('href').split('/').pop();
+            const scoreCellId = `score-cell-${problemId}`;
+            const datetimeCellId = `datetime-cell-${problemId}`;
+            if (problemId2Info.has(problemId)) {
+                const [score, datetimeString] = problemId2Info.get(problemId);
+                tableRow.querySelector('td:last-child').insertAdjacentHTML(
+                    'beforebegin',
+                    `<td class="text-center" id="${scoreCellId}">${score}</td>
+                    <td class="text-center" id="${datetimeCellId}">${datetimeString}</td>`);
+                if (datetimeString !== '-') {
+                    tableRow.classList.add(score > 0 ? 'success' : 'danger');
+                }
+            } else {
+                // ここに来ることは本来はないはず（未提出の問題だと [0, '-'] のはず）
+                tableRow.querySelector('td:last-child').insertAdjacentHTML(
+                    'beforebegin',
+                    `<td class="text-center" id="${scoreCellId}">-</td>
+                    <td class="text-center" id="${datetimeCellId}">-</td>`);
+            }
+        });
+    }
+
     const res = await fetch(`https://atcoder.jp/contests/${contestScreenName}/standings/json`);
     /** @type {Standings} */
     const standings = await res.json();
 
     const standingsEntry = standings.StandingsData.find((_standingsEntry) => _standingsEntry.UserScreenName == userScreenName);
 
-    document.querySelector('#main-div thead th:last-child').insertAdjacentHTML(
-        'beforebegin', '<th width="10%" class="text-center">得点</th><th class="text-center">提出日時</th>');
     document.querySelectorAll('#main-div tbody tr').forEach((tableRow, key) => {
-        const problem_id = tableRow.querySelector('td:nth-child(2) a').getAttribute('href').split('/').pop();
-        if (standingsEntry !== undefined && problem_id in standingsEntry.TaskResults) {
-            const taskResultEntry = standingsEntry.TaskResults[problem_id];
+        const problemId = tableRow.querySelector('td:nth-child(2) a').getAttribute('href').split('/').pop();
+        const scoreCellId = `score-cell-${problemId}`;
+        const datetimeCellId = `datetime-cell-${problemId}`;
+        if (standingsEntry !== undefined && problemId in standingsEntry.TaskResults) {
+            const taskResultEntry = standingsEntry.TaskResults[problemId];
             const dt = startTime.clone().add(taskResultEntry.Elapsed / 1000000000, 's');
-            console.log(dt.format());
-            tableRow.querySelector('td:last-child').insertAdjacentHTML(
-                'beforebegin',
-                `<td class="text-center">${taskResultEntry.Score / 100}</td>
-                <td class="text-center">${dt.format("YYYY/MM/DD HH:mm:ss")}</td>`);
-            tableRow.classList.add(taskResultEntry.Status === 1 ? 'success' : 'danger');
-        } else {
-            tableRow.querySelector('td:last-child').insertAdjacentHTML(
-                'beforebegin', '<td class="text-center">-</td><td class="text-center">-</td>');
+            // console.log(dt.format());
+
+            const [score, datetimeString] = problemId2Info.get(problemId);
+            const scoreFromStandings = taskResultEntry.Score / 100;
+            if (scoreFromStandings >= score) {
+                tableRow.querySelector(`#${scoreCellId}`).textContent = `${scoreFromStandings}`;
+                tableRow.querySelector(`#${datetimeCellId}`).textContent = `${dt.format("YYYY/MM/DD HH:mm:ss")}`;
+            }
+            if (taskResultEntry.Status === 1) {
+                if (tableRow.classList.contains('danger')) tableRow.classList.remove('danger');
+                tableRow.classList.add('success');
+            } else {
+                if (tableRow.classList.contains('success')) tableRow.classList.remove('success');
+                tableRow.classList.add('danger');
+            }
         }
     });
 })();
